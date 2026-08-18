@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI BOM Extractor (Gemini Pro)</title>
+    <style>
+        :root {
+            --primary: #4285f4;
+            --primary-hover: #3367d6;
+            --bg-color: #f8f9fa;
+            --border-color: #dadce0;
+            --text-color: #202124;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 900px;
+        }
+        h1 {
+            margin-top: 0;
+            color: var(--primary);
+            text-align: center;
+        }
+        .form-group {
+            margin-bottom: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+        label {
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        input[type="text"], input[type="password"], input[type="file"] {
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            font-size: 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background-color: var(--primary-hover);
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        #loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+            font-style: italic;
+            color: #5f6368;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid var(--primary);
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        #error {
+            color: #d93025;
+            background: #fce8e6;
+            padding: 15px;
+            border-radius: 4px;
+            display: none;
+            margin-bottom: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            display: none;
+        }
+        th, td {
+            border: 1px solid var(--border-color);
+            padding: 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #f1f3f4;
+            position: sticky;
+            top: 0;
+        }
+        tr:nth-child(even) {
+            background-color: #f8f9fa;
+        }
+        .actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #downloadBtn {
+            display: none;
+            background-color: #34a853;
+        }
+        #downloadBtn:hover {
+            background-color: #2d8c45;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>AI BOM Extractor</h1>
+    <p style="text-align: center; color: #5f6368; margin-bottom: 30px;">Upload an engineering drawing (PDF) and extract the Bill of Materials automatically using Gemini API.</p>
+    
+    <div id="error"></div>
+
+    <div class="form-group">
+        <label for="apiKey">Gemini API Key</label>
+        <input type="password" id="apiKey" placeholder="Enter your Gemini API Key..." required>
+    </div>
+
+    <div class="form-group">
+        <label for="modelName">Model</label>
+        <input type="text" id="modelName" value="gemini-3.1-pro" required>
+        <small style="color: #5f6368; margin-top: 5px;">Change to <code>gemini-1.5-pro</code> if 3.1 is not available on your API key yet.</small>
+    </div>
+
+    <div class="form-group">
+        <label for="fileInput">Engineering Drawing (PDF)</label>
+        <input type="file" id="fileInput" accept="application/pdf" required>
+    </div>
+
+    <div class="actions">
+        <button id="extractBtn">Extract BOM</button>
+        <button id="downloadBtn">Download CSV</button>
+    </div>
+
+    <div id="loading">
+        <div class="spinner"></div>
+        <div id="statusText">Analyzing PDF and extracting BOM. This may take up to a minute...</div>
+    </div>
+
+    <table id="bomTable">
+        <thead>
+            <tr>
+                <th>ITEM</th>
+                <th>QTY</th>
+                <th>DESCRIPTION</th>
+                <th>LENGTH</th>
+                <th>NOTE</th>
+                <th>RATING</th>
+            </tr>
+        </thead>
+        <tbody id="bomBody">
+            <!-- Rows will be injected here -->
+        </tbody>
+    </table>
+</div>
+
+<script>
+    let extractedData = null;
+
+    document.getElementById('extractBtn').addEventListener('click', async () => {
+        const apiKey = document.getElementById('apiKey').value.trim();
+        const modelName = document.getElementById('modelName').value.trim();
+        const fileInput = document.getElementById('fileInput');
+        const errorDiv = document.getElementById('error');
+        const loadingDiv = document.getElementById('loading');
+        const table = document.getElementById('bomTable');
+        const tbody = document.getElementById('bomBody');
+        const downloadBtn = document.getElementById('downloadBtn');
+
+        // Reset UI
+        errorDiv.style.display = 'none';
+        table.style.display = 'none';
+        downloadBtn.style.display = 'none';
+        tbody.innerHTML = '';
+        extractedData = null;
+
+        if (!apiKey) {
+            showError("Please enter your Gemini API Key.");
+            return;
+        }
+        if (!fileInput.files.length) {
+            showError("Please select a PDF file.");
+            return;
+        }
+
+        const file = fileInput.files[0];
+        
+        try {
+            // Disable button & show loading
+            document.getElementById('extractBtn').disabled = true;
+            loadingDiv.style.display = 'block';
+
+            // 1. Convert PDF to Base64
+            const base64Data = await fileToBase64(file);
+            // Remove the Data URL prefix (e.g., "data:application/pdf;base64,")
+            const base64String = base64Data.split(',')[1];
+
+            // 2. Prepare the API payload using Structured Outputs (JSON Schema)
+            const payload = {
+                contents: [
+                    {
+                        parts: [
+                            {
+                                text: `You are an expert engineering assistant. Please review the attached engineering drawing.
+Your task is to find the Bill of Materials (BOM) tables. 
+They usually have headers like ITEM, QTY, DESCRIPTION, LENGHT (IN), NOTE, RATING.
+
+Carefully read every page and extract every single row of the BOM table.
+Do NOT miss any rows. 
+If a field is empty or contains dashes, extract it as '---'.
+Return the data structured exactly according to the provided schema.`
+                            },
+                            {
+                                inlineData: {
+                                    mimeType: "application/pdf",
+                                    data: base64String
+                                }
+                            }
+                        ]
+                    }
+                ],
+                generationConfig: {
+                    temperature: 0.0,
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            items: {
+                                type: "ARRAY",
+                                description: "List of all bill of materials items found in the document",
+                                items: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        item_number: { type: "STRING", description: "The ITEM number or ID (e.g. 1, 2, 60A)" },
+                                        quantity: { type: "STRING", description: "The QTY or quantity required" },
+                                        description: { type: "STRING", description: "Description of the component, wire, or housing" },
+                                        length: { type: "STRING", description: "Length in inches, if applicable. Put '---' if none." },
+                                        note: { type: "STRING", description: "Note reference, if applicable. Put '---' if none." },
+                                        rating: { type: "STRING", description: "UL, IEC, or Flame Rating, if applicable. Put '---' if none." }
+                                    },
+                                    required: ["item_number", "quantity", "description", "length", "note", "rating"]
+                                }
+                            }
+                        },
+                        required: ["items"]
+                    }
+                }
+            };
+
+            // 3. Make the API Call
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(result.error?.message || "An error occurred calling the Gemini API.");
+            }
+
+            // 4. Parse the structured JSON response
+            const responseText = result.candidates[0].content.parts[0].text;
+            extractedData = JSON.parse(responseText);
+
+            if (!extractedData || !extractedData.items || extractedData.items.length === 0) {
+                showError("No BOM items were found in this document.");
+                return;
+            }
+
+            // 5. Render the Table
+            extractedData.items.forEach(item => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${escapeHtml(item.item_number)}</td>
+                    <td>${escapeHtml(item.quantity)}</td>
+                    <td>${escapeHtml(item.description)}</td>
+                    <td>${escapeHtml(item.length)}</td>
+                    <td>${escapeHtml(item.note)}</td>
+                    <td>${escapeHtml(item.rating)}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            table.style.display = 'table';
+            downloadBtn.style.display = 'block';
+
+        } catch (err) {
+            console.error(err);
+            showError(err.message);
+        } finally {
+            document.getElementById('extractBtn').disabled = false;
+            loadingDiv.style.display = 'none';
+        }
+    });
+
+    document.getElementById('downloadBtn').addEventListener('click', () => {
+        if (!extractedData || !extractedData.items) return;
+
+        let csvContent = "ITEM,QTY,DESCRIPTION,LENGTH,NOTE,RATING\n";
+        
+        extractedData.items.forEach(item => {
+            // Escape quotes and commas for CSV
+            const row = [
+                `"${(item.item_number || '').replace(/"/g, '""')}"`,
+                `"${(item.quantity || '').replace(/"/g, '""')}"`,
+                `"${(item.description || '').replace(/"/g, '""')}"`,
+                `"${(item.length || '').replace(/"/g, '""')}"`,
+                `"${(item.note || '').replace(/"/g, '""')}"`,
+                `"${(item.rating || '').replace(/"/g, '""')}"`
+            ].join(",");
+            csvContent += row + "\n";
+        });
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        
+        link.setAttribute("href", url);
+        link.setAttribute("download", "extracted_bom.csv");
+        link.style.visibility = 'hidden';
+        
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    });
+
+    // Helper: Convert File to Base64 Promise
+    function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = error => reject(error);
+        });
+    }
+
+    // Helper: Prevent XSS
+    function escapeHtml(unsafe) {
+        if (!unsafe) return '---';
+        return unsafe.toString()
+             .replace(/&/g, "&amp;")
+             .replace(/</g, "&lt;")
+             .replace(/>/g, "&gt;")
+             .replace(/"/g, "&quot;")
+             .replace(/'/g, "&#039;");
+    }
+</script>
+
+</body>
+</html>
