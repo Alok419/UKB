@@ -187,15 +187,13 @@
         const fileInput = document.getElementById('fileInput');
         const errorDiv = document.getElementById('error');
         const loadingDiv = document.getElementById('loading');
-        const table = document.getElementById('bomTable');
-        const tbody = document.getElementById('bomBody');
+        const resultsContainer = document.getElementById('resultsContainer');
         const downloadBtn = document.getElementById('downloadBtn');
 
         // Reset UI
         errorDiv.style.display = 'none';
-        table.style.display = 'none';
+        if (resultsContainer) resultsContainer.innerHTML = '';
         downloadBtn.style.display = 'none';
-        tbody.innerHTML = '';
         extractedData = null;
 
         if (!apiKey) {
