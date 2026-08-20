@@ -327,18 +327,64 @@ Output ONLY valid JSON. Do not include markdown formatting blocks.`;
             }
 
             if (typeof responseText === 'object') {
-                // The API returned the JSON directly as an object instead of a string!
+                console.log("Response text is already an object:", responseText);
                 extractedData = responseText;
             } else if (typeof responseText === 'string') {
-                // Clean up any markdown blocks if the model accidentally includes them
+                console.log("Raw String from Model before cleanup:", responseText);
                 responseText = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
-                extractedData = JSON.parse(responseText);
+                console.log("Cleaned String ready for parsing:", responseText);
+                try {
+                    extractedData = JSON.parse(responseText);
+                    console.log("Successfully parsed JSON string to object:", extractedData);
+                } catch (e) {
+                    console.error("Failed to parse JSON string:", responseText);
+                    throw new Error("Model returned invalid JSON format.");
+                }
             }
 
-            if (!extractedData || !extractedData.items || extractedData.items.length === 0) {
-                showError("No BOM items were found in this document.");
+            // Fallback 1: If the model returned an array directly instead of { items: [...] }
+            if (Array.isArray(extractedData)) {
+                console.log("Model returned an array directly. Wrapping in { items: [...] }");
+                extractedData = { items: extractedData };
+            }
+
+            // Fallback 2: If the array is hiding under a different key like "bom" or "data"
+            if (extractedData && !extractedData.items) {
+                console.log("No 'items' key found. Searching object for any array...");
+                for (let key in extractedData) {
+                    if (Array.isArray(extractedData[key])) {
+                        console.log(`Found array under key: '${key}'. Mapping to 'items'.`);
+                        extractedData.items = extractedData[key];
+                        break;
+                    }
+                }
+            }
+
+            // Deep Fallback: If OpenAI nested the text in a standard Chat Completion format inside an object
+            if (extractedData && extractedData.choices && Array.isArray(extractedData.choices)) {
+                console.log("Detected nested choices array (Standard OpenAI Chat format). Extracting content...");
+                let content = extractedData.choices[0]?.message?.content;
+                console.log("Nested content:", content);
+                if (typeof content === 'string') {
+                    content = content.replace(/```json/gi, '').replace(/```/g, '').trim();
+                    let parsedContent = JSON.parse(content);
+                    console.log("Parsed nested content:", parsedContent);
+                    extractedData = Array.isArray(parsedContent) ? { items: parsedContent } : parsedContent;
+                    if (!extractedData.items) {
+                        for (let key in extractedData) {
+                            if (Array.isArray(extractedData[key])) extractedData.items = extractedData[key];
+                        }
+                    }
+                }
+            }
+
+            if (!extractedData || !extractedData.items || !Array.isArray(extractedData.items) || extractedData.items.length === 0) {
+                console.error("Final Extracted Data completely failed to find an array:", extractedData);
+                showError("No BOM items were found. Check browser console (F12) for the Raw Extracted Data.");
                 return;
             }
+            
+            console.log("Final success! Extracted Items Array:", extractedData.items);
 
             // Render the Table
             extractedData.items.forEach(item => {
