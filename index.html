@@ -189,7 +189,7 @@
 
     // Listen for the API Key from the Salesforce LWC
     window.addEventListener("message", (event) => {
-        if (event.data && event.data.type === 'SET_OPENAI_API_KEY') {
+        if (event.data && (event.data.type === 'SET_GEMINI_API_KEY' || event.data.type === 'SET_OPENAI_API_KEY' || event.data.key)) {
             document.getElementById('apiKey').value = event.data.key;
             console.log("API Key successfully received from Salesforce LWC.");
         }
