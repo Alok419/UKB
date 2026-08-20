@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI BOM Extractor (Gemini Pro)</title>
+    <title>AI BOM Extractor</title>
     <style>
         :root {
-            --primary: #4285f4;
-            --primary-hover: #3367d6;
+            --primary: #1a73e8; 
+            --primary-hover: #1557b0;
             --bg-color: #f8f9fa;
             --border-color: #dadce0;
             --text-color: #202124;
@@ -35,16 +35,21 @@
             color: var(--primary);
             text-align: center;
         }
-        .form-group {
+        .form-row {
+            display: flex;
+            gap: 20px;
             margin-bottom: 20px;
+        }
+        .form-group {
             display: flex;
             flex-direction: column;
+            flex: 1;
         }
         label {
             font-weight: bold;
             margin-bottom: 8px;
         }
-        input[type="text"], input[type="file"] {
+        select, input[type="text"], input[type="file"] {
             padding: 10px;
             border: 1px solid var(--border-color);
             border-radius: 4px;
@@ -133,20 +138,28 @@
 
 <div class="container">
     <h1>AI BOM Extractor</h1>
-    <p style="text-align: center; color: #5f6368; margin-bottom: 30px;">Upload an engineering drawing (PDF) and extract the Bill of Materials automatically using Gemini API.</p>
+    <p style="text-align: center; color: #5f6368; margin-bottom: 30px;">Choose your AI provider, upload an engineering drawing (PDF), and extract the Bill of Materials.</p>
     
     <div id="error"></div>
 
     <!-- Hidden API Key field (receives key from Salesforce LWC) -->
     <input type="hidden" id="apiKey">
 
-    <div class="form-group">
-        <label for="modelName">Model</label>
-        <input type="text" id="modelName" value="gemini-3.1-pro" required>
-        <small style="color: #5f6368; margin-top: 5px;">Change to <code>gemini-1.5-pro</code> if 3.1 is not available on your API key yet.</small>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="provider">AI Provider</label>
+            <select id="provider">
+                <option value="gemini">Google Gemini</option>
+                <option value="openai">OpenAI</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="modelName">Model Name</label>
+            <input type="text" id="modelName" value="gemini-1.5-flash" required>
+        </div>
     </div>
 
-    <div class="form-group">
+    <div class="form-group" style="margin-bottom: 20px;">
         <label for="fileInput">Engineering Drawing (PDF)</label>
         <input type="file" id="fileInput" accept="application/pdf" required>
     </div>
@@ -158,7 +171,7 @@
 
     <div id="loading">
         <div class="spinner"></div>
-        <div id="statusText">Analyzing PDF and extracting BOM. This may take up to a minute...</div>
+        <div id="statusText">Analyzing PDF and extracting BOM...</div>
     </div>
 
     <table id="bomTable">
@@ -181,9 +194,19 @@
 <script>
     let extractedData = null;
 
+    // Automatically update default model when provider changes
+    document.getElementById('provider').addEventListener('change', (e) => {
+        const modelInput = document.getElementById('modelName');
+        if(e.target.value === 'gemini') {
+            modelInput.value = 'gemini-1.5-flash';
+        } else {
+            modelInput.value = 'gpt-4o'; // Or gpt-5.6
+        }
+    });
+
     // Listen for the API Key from the Salesforce LWC
     window.addEventListener("message", (event) => {
-        if (event.data && event.data.type === 'SET_GEMINI_API_KEY') {
+        if (event.data && (event.data.type === 'SET_GEMINI_API_KEY' || event.data.type === 'SET_OPENAI_API_KEY')) {
             document.getElementById('apiKey').value = event.data.key;
             console.log("API Key successfully received from Salesforce LWC.");
         }
@@ -191,6 +214,7 @@
 
     document.getElementById('extractBtn').addEventListener('click', async () => {
         const apiKey = document.getElementById('apiKey').value.trim();
+        const provider = document.getElementById('provider').value;
         const modelName = document.getElementById('modelName').value.trim();
         const fileInput = document.getElementById('fileInput');
         const errorDiv = document.getElementById('error');
@@ -218,85 +242,79 @@
         const file = fileInput.files[0];
         
         try {
-            // Disable button & show loading
             document.getElementById('extractBtn').disabled = true;
             loadingDiv.style.display = 'block';
 
-            // 1. Convert PDF to Base64
+            // Convert PDF to Base64
             const base64Data = await fileToBase64(file);
-            // Remove the Data URL prefix (e.g., "data:application/pdf;base64,")
             const base64String = base64Data.split(',')[1];
+            
+            const promptText = `You are an expert engineering assistant. Review the attached engineering drawing.
+Find the Bill of Materials (BOM) tables. They usually have headers like ITEM, QTY, DESCRIPTION, LENGTH, NOTE, RATING.
+Carefully extract every single row of the BOM table.
+Return the result PURELY as a JSON object with a single key 'items', which is an array of objects.
+Each object must have these string keys: item_number, quantity, description, length, note, rating.
+Output ONLY valid JSON. Do not include markdown formatting blocks.`;
 
-            // 2. Prepare the API payload using Structured Outputs (JSON Schema)
-            const payload = {
-                contents: [
-                    {
+            let responseText = "";
+
+            if (provider === 'gemini') {
+                // --- GOOGLE GEMINI LOGIC ---
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+                const payload = {
+                    contents: [{
                         parts: [
-                            {
-                                text: `You are an expert engineering assistant. Please review the attached engineering drawing.
-Your task is to find the Bill of Materials (BOM) tables. 
-They usually have headers like ITEM, QTY, DESCRIPTION, LENGHT (IN), NOTE, RATING.
-
-Carefully read every page and extract every single row of the BOM table.
-Do NOT miss any rows. 
-If a field is empty or contains dashes, extract it as '---'.
-Return the data structured exactly according to the provided schema.`
-                            },
-                            {
-                                inlineData: {
-                                    mimeType: "application/pdf",
-                                    data: base64String
-                                }
-                            }
+                            { text: promptText },
+                            { inlineData: { mimeType: "application/pdf", data: base64String } }
                         ]
-                    }
-                ],
-                generationConfig: {
-                    temperature: 0.0,
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: "OBJECT",
-                        properties: {
-                            items: {
-                                type: "ARRAY",
-                                description: "List of all bill of materials items found in the document",
-                                items: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        item_number: { type: "STRING", description: "The ITEM number or ID (e.g. 1, 2, 60A)" },
-                                        quantity: { type: "STRING", description: "The QTY or quantity required" },
-                                        description: { type: "STRING", description: "Description of the component, wire, or housing" },
-                                        length: { type: "STRING", description: "Length in inches, if applicable. Put '---' if none." },
-                                        note: { type: "STRING", description: "Note reference, if applicable. Put '---' if none." },
-                                        rating: { type: "STRING", description: "UL, IEC, or Flame Rating, if applicable. Put '---' if none." }
-                                    },
-                                    required: ["item_number", "quantity", "description", "length", "note", "rating"]
-                                }
-                            }
-                        },
-                        required: ["items"]
-                    }
-                }
-            };
+                    }],
+                    generationConfig: { responseMimeType: "application/json" }
+                };
 
-            // 3. Make the API Call
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload)
-            });
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error?.message || "Gemini API Error");
+                
+                responseText = result.candidates[0].content.parts[0].text;
 
-            const result = await response.json();
+            } else {
+                // --- OPENAI LOGIC ---
+                const url = `https://api.openai.com/v1/responses`;
+                const payload = {
+                    model: modelName,
+                    input: [
+                        {
+                            role: "user",
+                            content: [
+                                { type: "input_file", filename: file.name, file_data: `data:application/pdf;base64,${base64String}` },
+                                { type: "input_text", text: promptText }
+                            ]
+                        }
+                    ]
+                };
 
-            if (!response.ok) {
-                throw new Error(result.error?.message || "An error occurred calling the Gemini API.");
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error?.message || "OpenAI API Error");
+                
+                responseText = result.output_text || (result.output && result.output.text) || "";
             }
 
-            // 4. Parse the structured JSON response
-            const responseText = result.candidates[0].content.parts[0].text;
+            // Clean up any markdown blocks if the model accidentally includes them
+            responseText = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
             extractedData = JSON.parse(responseText);
 
             if (!extractedData || !extractedData.items || extractedData.items.length === 0) {
@@ -304,7 +322,7 @@ Return the data structured exactly according to the provided schema.`
                 return;
             }
 
-            // 5. Render the Table
+            // Render the Table
             extractedData.items.forEach(item => {
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
@@ -323,7 +341,7 @@ Return the data structured exactly according to the provided schema.`
 
         } catch (err) {
             console.error(err);
-            showError(err.message);
+            showError("Error: " + err.message + " (If testing OpenAI, check browser console for CORS errors)");
         } finally {
             document.getElementById('extractBtn').disabled = false;
             loadingDiv.style.display = 'none';
@@ -336,7 +354,6 @@ Return the data structured exactly according to the provided schema.`
         let csvContent = "ITEM,QTY,DESCRIPTION,LENGTH,NOTE,RATING\n";
         
         extractedData.items.forEach(item => {
-            // Escape quotes and commas for CSV
             const row = [
                 `"${(item.item_number || '').replace(/"/g, '""')}"`,
                 `"${(item.quantity || '').replace(/"/g, '""')}"`,
@@ -361,7 +378,6 @@ Return the data structured exactly according to the provided schema.`
         document.body.removeChild(link);
     });
 
-    // Helper: Convert File to Base64 Promise
     function fileToBase64(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -371,7 +387,6 @@ Return the data structured exactly according to the provided schema.`
         });
     }
 
-    // Helper: Prevent XSS
     function escapeHtml(unsafe) {
         if (!unsafe) return '---';
         return unsafe.toString()
