@@ -147,15 +147,8 @@
 
     <div class="form-row">
         <div class="form-group">
-            <label for="provider">AI Provider</label>
-            <select id="provider">
-                <option value="gemini">Google Gemini</option>
-                <option value="openai">OpenAI</option>
-            </select>
-        </div>
-        <div class="form-group">
             <label for="modelName">Model Name</label>
-            <input type="text" id="modelName" value="gemini-1.5-flash" required>
+            <input type="text" id="modelName" value="gpt-4o" required>
         </div>
     </div>
 
@@ -194,19 +187,9 @@
 <script>
     let extractedData = null;
 
-    // Automatically update default model when provider changes
-    document.getElementById('provider').addEventListener('change', (e) => {
-        const modelInput = document.getElementById('modelName');
-        if(e.target.value === 'gemini') {
-            modelInput.value = 'gemini-1.5-flash';
-        } else {
-            modelInput.value = 'gpt-4o'; // Or gpt-5.6
-        }
-    });
-
     // Listen for the API Key from the Salesforce LWC
     window.addEventListener("message", (event) => {
-        if (event.data && (event.data.type === 'SET_GEMINI_API_KEY' || event.data.type === 'SET_OPENAI_API_KEY')) {
+        if (event.data && event.data.type === 'SET_OPENAI_API_KEY') {
             document.getElementById('apiKey').value = event.data.key;
             console.log("API Key successfully received from Salesforce LWC.");
         }
@@ -214,7 +197,6 @@
 
     document.getElementById('extractBtn').addEventListener('click', async () => {
         const apiKey = document.getElementById('apiKey').value.trim();
-        const provider = document.getElementById('provider').value;
         const modelName = document.getElementById('modelName').value.trim();
         const fileInput = document.getElementById('fileInput');
         const errorDiv = document.getElementById('error');
@@ -249,81 +231,54 @@
             const base64Data = await fileToBase64(file);
             const base64String = base64Data.split(',')[1];
             
-            const promptText = `You are an expert engineering assistant. Review the attached engineering drawing.
-Find the Bill of Materials (BOM) tables. They usually have headers like ITEM, QTY, DESCRIPTION, LENGTH, NOTE, RATING.
-Carefully extract every single row of the BOM table.
+            const promptText = `You are an expert engineering assistant. Review the attached files which contain engineering drawings and other related documents.
+Read these documents carefully and generate a complete Bill of Materials (BOM) for the assembly or project described.
 Return the result PURELY as a JSON object with a single key 'items', which is an array of objects.
 Each object must have these string keys: item_number, quantity, description, length, note, rating.
 Output ONLY valid JSON. Do not include markdown formatting blocks.`;
 
             let responseText = "";
 
-            if (provider === 'gemini') {
-                // --- GOOGLE GEMINI LOGIC ---
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-                const payload = {
-                    contents: [{
-                        parts: [
-                            { text: promptText },
-                            { inlineData: { mimeType: "application/pdf", data: base64String } }
+            // --- OPENAI LOGIC ---
+            const url = `https://api.openai.com/v1/responses`;
+            const payload = {
+                model: modelName,
+                input: [
+                    {
+                        role: "user",
+                        content: [
+                            { type: "input_file", filename: file.name, file_data: `data:application/pdf;base64,${base64String}` },
+                            { type: "input_text", text: promptText }
                         ]
-                    }],
-                    generationConfig: { responseMimeType: "application/json" }
-                };
+                    }
+                ]
+            };
 
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const result = await response.json();
+            
+            // IMPORTANT: Let's log exactly what OpenAI sends back so we can see it!
+            console.log("Raw OpenAI Result:", result);
+
+            if (!response.ok) throw new Error(result.error?.message || "OpenAI API Error");
+            
+            // Try every possible location the text might be hiding in the new API
+            responseText = result.output_text 
+                || (result.output && result.output.text) 
+                || (result.choices && result.choices[0] && result.choices[0].message && result.choices[0].message.content)
+                || result.text 
+                || "";
                 
-                const result = await response.json();
-                if (!response.ok) throw new Error(result.error?.message || "Gemini API Error");
-                
-                responseText = result.candidates[0].content.parts[0].text;
-
-            } else {
-                // --- OPENAI LOGIC ---
-                const url = `https://api.openai.com/v1/responses`;
-                const payload = {
-                    model: modelName,
-                    input: [
-                        {
-                            role: "user",
-                            content: [
-                                { type: "input_file", filename: file.name, file_data: `data:application/pdf;base64,${base64String}` },
-                                { type: "input_text", text: promptText }
-                            ]
-                        }
-                    ]
-                };
-
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`
-                    },
-                    body: JSON.stringify(payload)
-                });
-
-                const result = await response.json();
-                
-                // IMPORTANT: Let's log exactly what OpenAI sends back so we can see it!
-                console.log("Raw OpenAI Result:", result);
-
-                if (!response.ok) throw new Error(result.error?.message || "OpenAI API Error");
-                
-                // Try every possible location the text might be hiding in the new API
-                responseText = result.output_text 
-                    || (result.output && result.output.text) 
-                    || (result.choices && result.choices[0] && result.choices[0].message && result.choices[0].message.content)
-                    || result.text 
-                    || "";
-                    
-                if (!responseText) {
-                    throw new Error("The API succeeded, but the response text was completely empty. Check the browser console to see what OpenAI sent.");
-                }
+            if (!responseText) {
+                throw new Error("The API succeeded, but the response text was completely empty. Check the browser console to see what OpenAI sent.");
             }
 
             if (typeof responseText === 'object') {
