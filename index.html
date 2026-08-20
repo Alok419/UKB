@@ -240,15 +240,21 @@ Output ONLY valid JSON. Do not include markdown formatting blocks.`;
             let responseText = "";
 
             // --- OPENAI LOGIC ---
-            const url = `https://api.openai.com/v1/responses`;
+            const url = `https://api.openai.com/v1/chat/completions`;
             const payload = {
                 model: modelName,
-                input: [
+                messages: [
                     {
                         role: "user",
                         content: [
-                            { type: "input_file", filename: file.name, file_data: `data:application/pdf;base64,${base64String}` },
-                            { type: "input_text", text: promptText }
+                            { type: "text", text: promptText },
+                            { 
+                                type: "file", 
+                                file: {
+                                    file_data: `data:application/pdf;base64,${base64String}`,
+                                    filename: file.name
+                                }
+                            }
                         ]
                     }
                 ]
@@ -270,31 +276,22 @@ Output ONLY valid JSON. Do not include markdown formatting blocks.`;
 
             if (!response.ok) throw new Error(result.error?.message || "OpenAI API Error");
             
-            // Try every possible location the text might be hiding in the new API
-            responseText = result.output_text 
-                || (result.output && result.output.text) 
-                || (result.choices && result.choices[0] && result.choices[0].message && result.choices[0].message.content)
-                || result.text 
-                || "";
+            // Standard location for chat completions text
+            responseText = result.choices && result.choices[0]?.message?.content;
                 
             if (!responseText) {
-                throw new Error("The API succeeded, but the response text was completely empty. Check the browser console to see what OpenAI sent.");
+                throw new Error("The API succeeded, but the response text was not found. Check the browser console to see what OpenAI sent.");
             }
 
-            if (typeof responseText === 'object') {
-                console.log("Response text is already an object:", responseText);
-                extractedData = responseText;
-            } else if (typeof responseText === 'string') {
-                console.log("Raw String from Model before cleanup:", responseText);
-                responseText = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
-                console.log("Cleaned String ready for parsing:", responseText);
-                try {
-                    extractedData = JSON.parse(responseText);
-                    console.log("Successfully parsed JSON string to object:", extractedData);
-                } catch (e) {
-                    console.error("Failed to parse JSON string:", responseText);
-                    throw new Error("Model returned invalid JSON format.");
-                }
+            console.log("Raw String from Model before cleanup:", responseText);
+            responseText = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
+            console.log("Cleaned String ready for parsing:", responseText);
+            try {
+                extractedData = JSON.parse(responseText);
+                console.log("Successfully parsed JSON string to object:", extractedData);
+            } catch (e) {
+                console.error("Failed to parse JSON string:", responseText);
+                throw new Error("Model returned invalid JSON format.");
             }
 
             // Fallback 1: If the model returned an array directly instead of { items: [...] }
