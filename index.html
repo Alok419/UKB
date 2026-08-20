@@ -326,9 +326,14 @@ Output ONLY valid JSON. Do not include markdown formatting blocks.`;
                 }
             }
 
-            // Clean up any markdown blocks if the model accidentally includes them
-            responseText = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
-            extractedData = JSON.parse(responseText);
+            if (typeof responseText === 'object') {
+                // The API returned the JSON directly as an object instead of a string!
+                extractedData = responseText;
+            } else if (typeof responseText === 'string') {
+                // Clean up any markdown blocks if the model accidentally includes them
+                responseText = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
+                extractedData = JSON.parse(responseText);
+            }
 
             if (!extractedData || !extractedData.items || extractedData.items.length === 0) {
                 showError("No BOM items were found in this document.");
