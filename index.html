@@ -308,9 +308,22 @@ Output ONLY valid JSON. Do not include markdown formatting blocks.`;
                 });
 
                 const result = await response.json();
+                
+                // IMPORTANT: Let's log exactly what OpenAI sends back so we can see it!
+                console.log("Raw OpenAI Result:", result);
+
                 if (!response.ok) throw new Error(result.error?.message || "OpenAI API Error");
                 
-                responseText = result.output_text || (result.output && result.output.text) || "";
+                // Try every possible location the text might be hiding in the new API
+                responseText = result.output_text 
+                    || (result.output && result.output.text) 
+                    || (result.choices && result.choices[0] && result.choices[0].message && result.choices[0].message.content)
+                    || result.text 
+                    || "";
+                    
+                if (!responseText) {
+                    throw new Error("The API succeeded, but the response text was completely empty. Check the browser console to see what OpenAI sent.");
+                }
             }
 
             // Clean up any markdown blocks if the model accidentally includes them
@@ -341,7 +354,7 @@ Output ONLY valid JSON. Do not include markdown formatting blocks.`;
 
         } catch (err) {
             console.error(err);
-            showError("Error: " + err.message + " (If testing OpenAI, check browser console for CORS errors)");
+            showError("Error: " + err.message);
         } finally {
             document.getElementById('extractBtn').disabled = false;
             loadingDiv.style.display = 'none';
